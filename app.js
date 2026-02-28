@@ -1,12 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 /** SUPABASE DETAILS */
-const SUPABASE_URL ="https://qzmhqadupwdyzutnufhc.supabase.co";
-const SUPABASE_ANON_KEY ="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6bWhxYWR1cHdkeXp1dG51ZmhjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMzcxMTgsImV4cCI6MjA4NzgxMzExOH0.IzkC53QHKhTZ2fub-aqbbZda5svKJnEts4c6SCVeCX8"; // keep your existing key
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const SUPABASE_URL = "https://qzmhqadupwdyzutnufhc.supabase.co";
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6bWhxYWR1cHdkeXp1dG51ZmhjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMzcxMTgsImV4cCI6MjA4NzgxMzExOH0.IzkC53QHKhTZ2fub-aqbbZda5svKJnEts4c6SCVeCX8"; // <-- replace this
 
-console.log("SUPABASE_URL:", SUPABASE_URL);
-console.log("ANON KEY starts:", SUPABASE_ANON_KEY.slice(0, 15));
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const $ = (id) => document.getElementById(id);
 const msgBox = $("messages");
@@ -27,7 +26,7 @@ async function getSessionUser() {
 /* ---------------- PROFILE HELPERS ---------------- */
 
 function xpNeeded(level) {
-  return 100 * level; // infinite scaling
+  return 100 * level; // infinite leveling
 }
 
 function maxStake(level) {
@@ -46,16 +45,20 @@ async function loadProfile(userId) {
 }
 
 async function ensureProfile(user, usernameIfNew = null) {
-  const { data: existing } = await supabase
+  const { data: existing, error: e0 } = await supabase
     .from("profiles")
     .select("*")
     .eq("user_id", user.id)
     .maybeSingle();
 
+  // If there was an actual error (not just "no row"), surface it
+  if (e0 && !existing && e0.code && e0.code !== "PGRST116") {
+    throw e0;
+  }
+
   if (existing) return existing;
 
   const username = usernameIfNew || user.email.split("@")[0];
-
   const { data, error } = await supabase
     .from("profiles")
     .insert([{ user_id: user.id, username }])
@@ -73,7 +76,7 @@ async function loadHabits(userId) {
     .from("habits")
     .select("*")
     .eq("user_id", userId)
-    .order("created_at", { ascending: false });
+    .order("id", { ascending: false }); // ✅ back to id (works even if no created_at)
 
   if (error) throw error;
   return data;
@@ -105,6 +108,7 @@ async function refreshUI() {
   const profile = await loadProfile(user.id);
   const habits = await loadHabits(user.id);
 
+  // Topbar with XP remaining + next level bonus
   const xpRequired = xpNeeded(profile.level);
   const xpRemaining = xpRequired - profile.xp;
   const nextLevel = profile.level + 1;
@@ -120,11 +124,11 @@ async function refreshUI() {
     </div>
     <button id="btnLogout">Logout</button>
   `;
-
   hide($("topbar"), false);
 
   $("btnLogout").onclick = async () => {
     await supabase.auth.signOut();
+    msg("Logged out.");
     refreshUI();
   };
 
@@ -143,15 +147,10 @@ async function refreshUI() {
       <td>${Number(h.stake).toFixed(2)}</td>
       <td>${h.streak}</td>
       <td>
-        <button class="small" 
-          ${done ? "disabled" : ""} 
-          data-action="checkin" 
-          data-id="${h.id}">
+        <button class="small" ${done ? "disabled" : ""} data-action="checkin" data-id="${h.id}">
           ${done ? "Done" : "Check In"}
         </button>
-        <button class="small danger" 
-          data-action="delete" 
-          data-id="${h.id}">
+        <button class="small danger" data-action="delete" data-id="${h.id}">
           Delete
         </button>
       </td>
@@ -159,12 +158,12 @@ async function refreshUI() {
     tbody.appendChild(tr);
   }
 
-  /* 🔥 FIXED: NO Number() conversion anymore */
+  // ✅ UUID-safe: do NOT Number() the id
   tbody.onclick = async (e) => {
     const btn = e.target.closest("button");
     if (!btn) return;
 
-    const habitId = btn.dataset.id; // UUID STRING
+    const habitId = btn.dataset.id; // UUID string
     const action = btn.dataset.action;
 
     if (action === "delete") await deleteHabit(user.id, habitId);
@@ -174,15 +173,16 @@ async function refreshUI() {
   /* -------- LEADERBOARD -------- */
 
   const lb = $("leaderboard").querySelector("tbody");
-
-  const { data: leaders } = await supabase
+  const { data: leaders, error } = await supabase
     .from("profiles")
     .select("username, level, xp, balance")
     .order("level", { ascending: false })
     .order("xp", { ascending: false })
     .limit(50);
 
-  lb.innerHTML = leaders
+  if (error) throw error;
+
+  lb.innerHTML = (leaders || [])
     .map(
       (u) =>
         `<tr>
@@ -205,53 +205,66 @@ async function addHabit(userId, profile) {
   const stake = Number($("habitStake").value);
 
   if (!name) return msg("Enter habit name.");
-  if (!stake || stake <= 0) return msg("Enter stake > 0.");
-  if (stake > maxStake(profile.level)) return msg("Stake too high.");
-  if (stake > profile.balance) return msg("Not enough balance.");
+  if (!stake || stake <= 0) return msg("Enter a stake > 0.");
+  if (stake > maxStake(profile.level)) return msg("Stake exceeds your level cap.");
+  if (stake > Number(profile.balance)) return msg("Not enough balance.");
 
-  await supabase
+  const newBalance = Number(profile.balance) - stake;
+
+  const { error: e1 } = await supabase
     .from("profiles")
-    .update({ balance: profile.balance - stake })
+    .update({ balance: newBalance })
     .eq("user_id", userId);
 
-  await supabase
-    .from("habits")
-    .insert([{ user_id: userId, name, stake, streak: 0 }]);
+  if (e1) throw e1;
 
+  const { error: e2 } = await supabase
+    .from("habits")
+    .insert([{ user_id: userId, name, stake, streak: 0, last_completed: null }]);
+
+  if (e2) throw e2;
+
+  $("habitName").value = "";
+  $("habitStake").value = "";
   msg("Habit added.");
-  refreshUI();
+  await refreshUI();
 }
 
 async function deleteHabit(userId, habitId) {
-  const { data: habit } = await supabase
+  const { data: habit, error: e1 } = await supabase
     .from("habits")
     .select("*")
     .eq("id", habitId)
     .single();
+  if (e1) throw e1;
 
   const profile = await loadProfile(userId);
+  const newBalance = Number(profile.balance) + Number(habit.stake);
 
-  await supabase
+  const { error: e2 } = await supabase
     .from("profiles")
-    .update({ balance: profile.balance + Number(habit.stake) })
+    .update({ balance: newBalance })
     .eq("user_id", userId);
+  if (e2) throw e2;
 
-  await supabase.from("habits").delete().eq("id", habitId);
+  const { error: e3 } = await supabase.from("habits").delete().eq("id", habitId);
+  if (e3) throw e3;
 
   msg("Habit deleted. Stake refunded.");
-  refreshUI();
+  await refreshUI();
 }
 
 async function checkinHabit(userId, habitId) {
   const today = todayISO();
 
-  const { data: h } = await supabase
+  const { data: h, error: e1 } = await supabase
     .from("habits")
     .select("*")
     .eq("id", habitId)
     .single();
+  if (e1) throw e1;
 
-  if (h.last_completed === today) return msg("Already checked in.");
+  if (h.last_completed === today) return msg("Already checked in today.");
 
   let streak = h.streak || 0;
   let stake = Number(h.stake);
@@ -263,7 +276,7 @@ async function checkinHabit(userId, habitId) {
     else {
       streak = 1;
       stake *= 0.8;
-      note = "⚠️ Missed a day! Stake reduced. ";
+      note = "⚠️ Missed a day! Stake reduced by 20%. ";
     }
   } else {
     streak = 1;
@@ -271,36 +284,40 @@ async function checkinHabit(userId, habitId) {
 
   const dailyReward = Math.min(stake * 0.05 + stake * 0.02 * streak, stake * 0.25);
 
-  await supabase
+  const { error: e2 } = await supabase
     .from("habits")
     .update({ streak, stake, last_completed: today })
     .eq("id", habitId);
+  if (e2) throw e2;
 
   const profile = await loadProfile(userId);
 
-  let xp = profile.xp + 10;
-  let level = profile.level;
+  // XP + infinite level-ups + £level bonus per level-up
+  let xp = Number(profile.xp) + 10;
+  let level = Number(profile.level);
   let levelUpReward = 0;
 
   while (xp >= xpNeeded(level)) {
     xp -= xpNeeded(level);
     level += 1;
-    levelUpReward += level;
+    levelUpReward += level; // bonus equals the NEW level
   }
 
-  const newBalance = profile.balance + dailyReward + levelUpReward;
+  const newBalance = Number(profile.balance) + dailyReward + levelUpReward;
 
-  await supabase
+  const { error: e3 } = await supabase
     .from("profiles")
     .update({ balance: newBalance, xp, level })
     .eq("user_id", userId);
+  if (e3) throw e3;
 
   let message = `${note}Earned £${dailyReward.toFixed(2)} +10 XP!`;
-  if (levelUpReward > 0)
-    message += ` 🎉 Level Up! Bonus £${levelUpReward}!`;
+  if (levelUpReward > 0) {
+    message += ` 🎉 Leveled up! Bonus £${levelUpReward}!`;
+  }
 
   msg(message);
-  refreshUI();
+  await refreshUI();
 }
 
 /* ---------------- AUTH ---------------- */
@@ -312,7 +329,8 @@ $("btnLogin").onclick = async () => {
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) return msg(error.message);
 
-  refreshUI();
+  msg("Logged in.");
+  await refreshUI();
 };
 
 $("btnRegister").onclick = async () => {
@@ -320,15 +338,19 @@ $("btnRegister").onclick = async () => {
   const password = $("password").value;
   const username = $("username").value.trim();
 
-  if (!username) return msg("Enter username.");
+  if (!username) return msg("Enter a username for registration.");
 
   const { error } = await supabase.auth.signUp({ email, password });
   if (error) return msg(error.message);
 
   const user = await getSessionUser();
-  if (user) await ensureProfile(user, username);
-
-  refreshUI();
+  if (user) {
+    await ensureProfile(user, username);
+    msg("Registered and ready.");
+    await refreshUI();
+  } else {
+    msg("Registered. Check your email to confirm, then login.");
+  }
 };
 
 /* ---------------- INIT ---------------- */
@@ -344,13 +366,11 @@ $("btnRegister").onclick = async () => {
     await addHabit(u.id, profile);
   };
 
-  supabase.auth.onAuthStateChange(refreshUI);
+  supabase.auth.onAuthStateChange(async () => {
+    const u2 = await getSessionUser();
+    if (u2) await ensureProfile(u2);
+    refreshUI();
+  });
 
   refreshUI();
 })();
-
-
-
-
-
-
