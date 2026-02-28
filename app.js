@@ -1,4 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"; // easy for GitHub Pages :contentReference[oaicite:3]{index=3}
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 /** 1) PUT YOUR SUPABASE DETAILS HERE */
 const SUPABASE_URL = "https://qzmhqadupwdyzutnufhc.supabase.co";
@@ -12,7 +12,9 @@ function msg(text) {
   msgBox.innerHTML = `<div class="msg">${text}</div>`;
 }
 
-function hide(el, yes=true){ el.classList.toggle("hidden", yes); }
+function hide(el, yes = true) {
+  el.classList.toggle("hidden", yes);
+}
 
 async function getSessionUser() {
   const { data } = await supabase.auth.getSession();
@@ -20,8 +22,12 @@ async function getSessionUser() {
 }
 
 /** Profiles helpers **/
-function xpNeeded(level) { return 100 * level; }
-function maxStake(level) { return 10 + (level - 1) * 5; }
+function xpNeeded(level) {
+  return 100 * level;
+}
+function maxStake(level) {
+  return 10 + (level - 1) * 5;
+}
 
 async function loadProfile(userId) {
   const { data, error } = await supabase
@@ -34,18 +40,18 @@ async function loadProfile(userId) {
   return data;
 }
 
-async function ensureProfile(user, usernameIfNew=null) {
-  // Try load
-  const { data: existing } = await supabase
+async function ensureProfile(user, usernameIfNew = null) {
+  const { data: existing, error: e0 } = await supabase
     .from("profiles")
     .select("*")
     .eq("user_id", user.id)
     .maybeSingle();
 
+  if (e0) throw e0;
   if (existing) return existing;
 
-  // Create profile (new register)
   const username = usernameIfNew || user.email.split("@")[0];
+
   const { data, error } = await supabase
     .from("profiles")
     .insert([{ user_id: user.id, username }])
@@ -71,20 +77,20 @@ async function loadHabits(userId) {
 function todayISO() {
   const d = new Date();
   const yyyy = d.getFullYear();
-  const mm = String(d.getMonth()+1).padStart(2,"0");
-  const dd = String(d.getDate()).padStart(2,"0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 }
 
 function daysBetween(isoA, isoB) {
-  // isoA, isoB: "YYYY-MM-DD"
   const a = new Date(isoA + "T00:00:00Z");
   const b = new Date(isoB + "T00:00:00Z");
-  return Math.round((b - a) / (1000*60*60*24));
+  return Math.round((b - a) / (1000 * 60 * 60 * 24));
 }
 
 async function refreshUI() {
   const user = await getSessionUser();
+
   if (!user) {
     hide($("auth"), false);
     hide($("app"), true);
@@ -95,7 +101,7 @@ async function refreshUI() {
   const profile = await loadProfile(user.id);
   const habits = await loadHabits(user.id);
 
-  // topbar
+  // --- TOPBAR (Logout fixed) ---
   $("topbar").innerHTML = `
     <div>
       <b>${profile.username}</b> |
@@ -103,25 +109,37 @@ async function refreshUI() {
       ⭐ Level ${profile.level} (${profile.xp}/${xpNeeded(profile.level)} XP) |
       Max stake ${maxStake(profile.level).toFixed(2)}
     </div>
-    <button id="btnLogout">Logout</button>
+    <button id="btnLogout" type="button">Logout</button>
   `;
   hide($("topbar"), false);
-  $("btnLogout").onclick = async () => { await supabase.auth.signOut(); msg("Logged out."); refreshUI(); };
 
-  // habits table
+  const logoutBtn = document.getElementById("btnLogout");
+  logoutBtn.addEventListener("click", async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      msg("Logout failed: " + error.message);
+      return;
+    }
+    msg("Logged out.");
+    await refreshUI();
+  });
+
+  // --- HABITS TABLE ---
   const tbody = $("habitsTable").querySelector("tbody");
   tbody.innerHTML = "";
   const today = todayISO();
 
   for (const h of habits) {
-    const done = (h.last_completed === today);
+    const done = h.last_completed === today;
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${h.name}</td>
       <td>${Number(h.stake).toFixed(2)}</td>
       <td>${h.streak}</td>
       <td>
-        <button class="small" ${done ? "disabled" : ""} data-action="checkin" data-id="${h.id}">${done ? "Done" : "Check In"}</button>
+        <button class="small" ${
+          done ? "disabled" : ""
+        } data-action="checkin" data-id="${h.id}">${done ? "Done" : "Check In"}</button>
         <button class="small danger" data-action="delete" data-id="${h.id}">Delete</button>
       </td>
     `;
@@ -131,13 +149,15 @@ async function refreshUI() {
   tbody.onclick = async (e) => {
     const btn = e.target.closest("button");
     if (!btn) return;
+
     const id = Number(btn.dataset.id);
     const action = btn.dataset.action;
+
     if (action === "delete") await deleteHabit(user.id, id);
     if (action === "checkin") await checkinHabit(user.id, id);
   };
 
-  // leaderboard
+  // --- LEADERBOARD ---
   const lb = $("leaderboard").querySelector("tbody");
   const { data: leaders, error } = await supabase
     .from("profiles")
@@ -147,9 +167,15 @@ async function refreshUI() {
     .limit(50);
 
   if (error) throw error;
-  lb.innerHTML = leaders.map(u =>
-    `<tr><td>${u.username}</td><td>${u.level}</td><td>${u.xp}</td><td>${Number(u.balance).toFixed(2)}</td></tr>`
-  ).join("");
+
+  lb.innerHTML = leaders
+    .map(
+      (u) =>
+        `<tr><td>${u.username}</td><td>${u.level}</td><td>${u.xp}</td><td>${Number(
+          u.balance
+        ).toFixed(2)}</td></tr>`
+    )
+    .join("");
 
   hide($("auth"), true);
   hide($("app"), false);
@@ -164,20 +190,17 @@ async function addHabit(userId, profile) {
   if (stake > maxStake(profile.level)) return msg("Stake exceeds your level cap.");
   if (stake > Number(profile.balance)) return msg("Not enough balance.");
 
-  // subtract from balance + insert habit
   const newBalance = Number(profile.balance) - stake;
 
   const { error: e1 } = await supabase
     .from("profiles")
     .update({ balance: newBalance })
     .eq("user_id", userId);
-
   if (e1) throw e1;
 
   const { error: e2 } = await supabase
     .from("habits")
     .insert([{ user_id: userId, name, stake, streak: 0, last_completed: null }]);
-
   if (e2) throw e2;
 
   $("habitName").value = "";
@@ -187,7 +210,6 @@ async function addHabit(userId, profile) {
 }
 
 async function deleteHabit(userId, habitId) {
-  // get habit
   const { data: habit, error: e1 } = await supabase
     .from("habits")
     .select("*")
@@ -195,7 +217,6 @@ async function deleteHabit(userId, habitId) {
     .single();
   if (e1) throw e1;
 
-  // refund stake
   const profile = await loadProfile(userId);
   const newBalance = Number(profile.balance) + Number(habit.stake);
 
@@ -205,10 +226,7 @@ async function deleteHabit(userId, habitId) {
     .eq("user_id", userId);
   if (e2) throw e2;
 
-  const { error: e3 } = await supabase
-    .from("habits")
-    .delete()
-    .eq("id", habitId);
+  const { error: e3 } = await supabase.from("habits").delete().eq("id", habitId);
   if (e3) throw e3;
 
   msg("Habit deleted. Stake refunded.");
@@ -243,17 +261,16 @@ async function checkinHabit(userId, habitId) {
     streak = 1;
   }
 
-  const dailyReward = Math.min(stake*0.05 + stake*0.02*streak, stake*0.25);
+  const dailyReward = Math.min(stake * 0.05 + stake * 0.02 * streak, stake * 0.25);
 
-  // Update habit
   const { error: e2 } = await supabase
     .from("habits")
     .update({ streak, stake, last_completed: today })
     .eq("id", habitId);
   if (e2) throw e2;
 
-  // Update profile (balance + xp + level)
   const profile = await loadProfile(userId);
+
   let xp = profile.xp + 10;
   let level = profile.level;
 
@@ -278,8 +295,10 @@ async function checkinHabit(userId, habitId) {
 $("btnLogin").onclick = async () => {
   const email = $("email").value.trim();
   const password = $("password").value;
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) return msg(error.message);
+
   msg("Logged in.");
   await refreshUI();
 };
@@ -291,11 +310,9 @@ $("btnRegister").onclick = async () => {
 
   if (!username) return msg("Enter a username for registration.");
 
-  const { data, error } = await supabase.auth.signUp({ email, password });
+  const { error } = await supabase.auth.signUp({ email, password });
   if (error) return msg(error.message);
 
-  // supabase may require email confirmation depending on settings.
-  // If session exists now, create profile immediately:
   const user = await getSessionUser();
   if (user) {
     await ensureProfile(user, username);
@@ -306,14 +323,13 @@ $("btnRegister").onclick = async () => {
   }
 };
 
-/** On load: ensure profile exists and wire add habit **/
+/** On load **/
 (async () => {
+  // If already logged in, ensure profile exists
   const user = await getSessionUser();
-  if (user) {
-    // If someone signed up previously and never got profile row, create it from email prefix
-    await ensureProfile(user);
-  }
+  if (user) await ensureProfile(user);
 
+  // Add habit button
   $("btnAddHabit").onclick = async () => {
     const u = await getSessionUser();
     if (!u) return msg("Login first.");
@@ -321,12 +337,12 @@ $("btnRegister").onclick = async () => {
     await addHabit(u.id, profile);
   };
 
-  // react to auth changes
+  // React to auth changes
   supabase.auth.onAuthStateChange(async () => {
     const u2 = await getSessionUser();
     if (u2) await ensureProfile(u2);
-    refreshUI();
+    await refreshUI();
   });
 
-  refreshUI();
+  await refreshUI();
 })();
